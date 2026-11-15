@@ -1,0 +1,22 @@
+.glass {
+  background: var(--panel-bg);
+  backdrop-filter: blur(var(--blur)) saturate(140%);
+  -webkit-backdrop-filter: blur(var(--blur)) saturate(140%);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--r-panel);
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.45), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+}
+.glass--strong { background: var(--panel-bg-strong); }
+.glass[data-status] {
+  border-color: color-mix(in srgb, var(--status) 45%, transparent);
+  box-shadow: 0 0 24px var(--status-glow), 0 10px 40px rgba(0, 0, 0, 0.45);
+}
+.chip {
+  display: inline-flex; align-items: center; gap: var(--sp-2);
+  padding: var(--sp-1) var(--sp-3); border-radius: var(--r-chip);
+  border: 1px solid var(--panel-border); background: rgba(255, 255, 255, 0.04);
+  font-size: var(--fs-sm);
+  transition: border-color var(--dur) var(--ease), background var(--dur) var(--ease);
+}
+.chip[aria-pressed='true'] { border-color: var(--panel-border-active); background: rgba(34, 230, 255, 0.12); }
+.status-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--status); box-shadow: 0 0 8px var(--status-glow); }

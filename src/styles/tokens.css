@@ -1,0 +1,43 @@
+/* Single source of truth for the deep-space look. Never hard-code colors elsewhere. */
+:root {
+  /* surfaces */
+  --void: #04060d;
+  --hull: #0a1020;
+  --panel-bg: rgba(14, 22, 44, 0.55);
+  --panel-bg-strong: rgba(10, 16, 34, 0.78);
+  --panel-border: rgba(120, 190, 255, 0.16);
+  --panel-border-active: rgba(34, 230, 255, 0.55);
+
+  /* status: cyan nominal, amber caution, red critical */
+  --nominal: #22e6ff;
+  --caution: #ffb020;
+  --critical: #ff3b4e;
+  --nominal-glow: rgba(34, 230, 255, 0.35);
+  --caution-glow: rgba(255, 176, 32, 0.35);
+  --critical-glow: rgba(255, 59, 78, 0.4);
+
+  /* text */
+  --text: #e8f1ff;
+  --text-dim: #8fa4c7;
+  --text-faint: #566684;
+
+  /* type */
+  --font-display: 'Chakra Petch', system-ui, sans-serif;
+  --font-body: 'IBM Plex Sans', system-ui, sans-serif;
+
+  /* scale (1.2) */
+  --fs-xs: 0.72rem; --fs-sm: 0.85rem; --fs-md: 1rem;
+  --fs-lg: 1.2rem; --fs-xl: 1.44rem; --fs-2xl: 2rem;
+
+  /* space + radius */
+  --sp-1: 4px; --sp-2: 8px; --sp-3: 12px; --sp-4: 16px; --sp-6: 24px; --sp-8: 32px;
+  --r-panel: 18px; --r-chip: 8px;
+  --blur: 18px;
+
+  --ease: cubic-bezier(0.22, 1, 0.36, 1);
+  --dur: 180ms;
+}
+
+[data-status='nominal'] { --status: var(--nominal); --status-glow: var(--nominal-glow); }
+[data-status='caution'] { --status: var(--caution); --status-glow: var(--caution-glow); }
+[data-status='critical'] { --status: var(--critical); --status-glow: var(--critical-glow); }
