@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>HealthSense — Astronaut Digital Twin</title>
+<link rel="stylesheet" href="css/hud.css">
+</head>
+<body>
+<noscript>HealthSense needs JavaScript.</noscript>
+<!-- three.js r128: local copy first (python serve.py --fetch), CDN as fallback, 2D schematic if both fail -->
+<script src="vendor/three.min.js" onerror="void 0"></script>
+<script>window.THREE || document.write('<script src="https://cdnjs.cloudflare.com/ajax/libs/three.js/r128/three.min.js"><\/script>')</script>
+<script src="data/body_data.js"></script>
+<script src="js/core/core.js"></script>
+<script src="js/layers/layers.js"></script>
+<script src="js/logging/rules.js"></script>
+<script src="js/logging/logging.js"></script>
+<script src="js/gamification/gamification.js"></script>
+<script src="js/twin/twin.js"></script>
+<script src="js/twin/fallback.js"></script>
+<script src="js/ui/ui.js"></script>
+<script src="js/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,26 @@
+/* DESIGN TOKENS — Task 6 owns this file. The ONLY file allowed to contain raw colours.
+   Palette sampled from the supplied swatch image:
+   Rich Cyan #2E5268 · Light Jade #92C1AD · Pale Jade #C7E8DF · Icy Teal #EBFDFD · Deep navy #263B57 · page dark #171B24.
+   Status colours are not in the swatch (cyan/amber/red per the product brief). */
+:root{
+  color-scheme:dark;
+  /* ---- contract names (00 §و) ---- */
+  --color-bg-deep:#171B24;
+  --color-bg-panel:rgba(38,59,87,.66);
+  --color-nominal:#5EE6EE;
+  --color-caution:#FFB020;
+  --color-critical:#FF5C63;
+  --color-text-primary:#EBFDFD;
+  --color-text-muted:#A9C9C0;
+  --color-accent:#92C1AD;
+  --glass-blur:12px;
+  --radius-panel:14px;
+  --font-display:"Orbitron","Segoe UI Variable Display","Avenir Next","Trebuchet MS",system-ui,sans-serif;
+  --font-body:"IBM Plex Sans Arabic","Inter","Segoe UI",system-ui,-apple-system,Roboto,sans-serif;
+  /* ---- extras (palette steps, not part of the contract) ---- */
+  --surface:#263B57; --surface-2:#2E5268; --accent-pale:#C7E8DF; --icy:#EBFDFD;
+  --glass-edge:rgba(146,193,173,.42); --glow:rgba(94,230,238,.16);
+  --twin-skin:#92C1AD; --twin-bone:#EBFDFD; --twin-organ:#C7E8DF;   /* 3D body base colours (read by twin.js) */
+  --caution-soft:rgba(255,176,32,.16); --scrim:rgba(0,0,0,.6);
+  --t-fast:200ms; --t-slow:300ms; --touch:48px;
+}
