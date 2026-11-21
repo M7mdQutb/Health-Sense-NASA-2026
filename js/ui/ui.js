@@ -15,8 +15,8 @@
   const chip = s => `<span class="chip ${s}"><span aria-hidden="true">${ICON[s]}</span>${TXT[s]}</span>`;
   /** source badge: a Source ID from the contract, or the simulated flag (every shown number carries one) */
   const src = (id, type) => {
-    const s = id && store.get().sources.find(x => x.id === id), sim = !id || (type || (s && s.type)) === 'simulated';
-    return id ? `<span class="src ${sim ? 'sim' : ''}" title="${esc(s ? s.name : id)}${sim ? ' · simulated data' : ''}">⌖ ${esc(id)}</span>` : `<span class="src sim" title="Generated demo data">⚙ Simulated</span>`;
+    const s = id && store.get().sources.find(x => x.id === id), manual = type === 'manual', sim = !manual && (!id || (type || (s && s.type)) === 'simulated');
+    return id ? `<span class="src ${manual ? 'manual' : sim ? 'sim' : ''}" title="${manual ? 'Manual override · not sensor data · ' : ''}${esc(s ? s.name : id)}${sim ? ' · simulated data' : ''}">⌖ ${esc(id)}</span>` : `<span class="src sim" title="Generated demo data">⚙ Simulated</span>`;
   };
   const tvBadge = (id, what) => `<span class="src tv" title="Not in the source file: verify against ${esc(id)}">TO VERIFY · ${esc(id)}${what ? ' · ' + esc(what) : ''}</span>`;
   function ring(label, text, frac, status, safe, noChip) {
