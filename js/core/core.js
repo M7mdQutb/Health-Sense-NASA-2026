@@ -110,7 +110,7 @@
     return m;
   }
   const initial = () => ({
-    astronaut: { name: 'Nour Hamdy', missionDay: 47, missionTotalDays: 180, role: 'Mission Specialist' },
+    astronaut: { name: '', missionDay: 47, missionTotalDays: 180, role: '' },
     regionStatus: {
       skeletal: regionMap({
         spine: { score: 55, reason: 'ARED session missed 3 days in a row' },
