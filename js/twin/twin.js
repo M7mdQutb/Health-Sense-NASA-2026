@@ -59,26 +59,43 @@
     /* renderer / scene / camera */
     const renderer = new T.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
     renderer.setClearColor(0x000000, 0);                          // transparent → HUD shows behind
-    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 2));
+    renderer.setPixelRatio(Math.min(devicePixelRatio || 1, 1.5));
     const el = renderer.domElement; el.className = 'twin-canvas'; container.appendChild(el);
     const scene = new T.Scene(), camera = new T.PerspectiveCamera(38, 1, 0.05, 50);
     const body = new T.Group(); scene.add(body);
 
     /* build regions: 3 meshes max per region (skin / bone / organ) */
     const regions = {}, pickables = [];
+    let activePickables = pickables;
     C.REGIONS.forEach(id => {
       const d = window.TWIN_DATA.regions[id], g = new T.Group(); g.name = id; body.add(g);
-      const r = regions[id] = { id, data: d, group: g, color: new T.Color(BASE.skin), target: new T.Color(BASE.skin), glow: 0, mats: {}, set: false };
+      const r = regions[id] = { id, data: d, group: g, color: new T.Color(BASE.skin), target: new T.Color(BASE.skin), glow: 0, mats: {}, meshes: {}, set: false };
       [['skin', false, 0.55, 1], ['bone', true, 1, 0], ['organ', true, 1, 0]].forEach(([kind, solid, op, order]) => {
         if (!d[kind]) return;
         const m = r.mats[kind] = makeMat(BASE[kind], solid, op), mesh = new T.Mesh(geometry(d[kind]), m);
-        mesh.userData.region = id; mesh.renderOrder = kind === 'skin' ? 3 : 1; g.add(mesh); pickables.push(mesh);
+        r.meshes[kind] = mesh; mesh.userData.region = id; mesh.renderOrder = kind === 'skin' ? 3 : 1; g.add(mesh); pickables.push(mesh);
       });
     });
     const defaultCol = new T.Color(BASE.skin);
     function resolveColor(v) {
       if (C.STATUS && ['nominal', 'caution', 'critical'].includes(v)) v = css('--color-' + v) || { nominal: '#5EE6EE', caution: '#FFB020', critical: '#FF5C63' }[v];
       return new T.Color(v);
+    }
+
+    let currentModel = null;
+    function setModel(system, profile) {
+      if (currentModel === system) return;
+      profile = profile || {};
+      const bones = new Set(profile.boneRegions || []), organs = new Set(profile.organRegions || []);
+      C.REGIONS.forEach(id => {
+        const r = regions[id];
+        if (r.meshes.skin) { r.meshes.skin.visible = true; r.meshes.skin.material.uniforms.uOpacity.value = Number.isFinite(profile.skinOpacity) ? profile.skinOpacity : 0.55; }
+        if (r.meshes.bone) r.meshes.bone.visible = bones.has(id);
+        if (r.meshes.organ) r.meshes.organ.visible = organs.has(id);
+      });
+      activePickables = pickables.filter(mesh => mesh.visible);
+      container.dataset.model = system;
+      currentModel = system;
     }
 
     /* ---------- camera rig (own orbit controls: drag / wheel / pinch, limits, smooth focus) ---------- */
@@ -111,7 +128,7 @@
     label.className = 'twin-label'; container.appendChild(label);
     function pick(e) {
       const b = el.getBoundingClientRect(); ndc.set(((e.clientX - b.left) / b.width) * 2 - 1, -((e.clientY - b.top) / b.height) * 2 + 1);
-      ray.setFromCamera(ndc, camera); const h = ray.intersectObjects(pickables, false)[0]; return h ? h.object.userData.region : null;
+      ray.setFromCamera(ndc, camera); const h = ray.intersectObjects(activePickables, false)[0]; return h ? h.object.userData.region : null;
     }
     function setHover(id, e) {
       hoverId = id; el.style.cursor = id ? 'pointer' : 'grab';
@@ -193,7 +210,7 @@
     function setEffectsEnabled(on) { fx.enabled = !!on; if (!on) pGeo.setDrawRange(0, 0); }
 
     function setAutonomous(on) { container.classList.toggle('twin--autonomous', !!on); U.uAuto.value = on ? 1 : 0; }
-    function setQuality(q) { renderer.setPixelRatio(q === 'low' ? 1 : Math.min(devicePixelRatio || 1, 2)); if (q === 'low') setEffectsEnabled(false); resize(); container.dataset.quality = q; if (opts.onQuality) opts.onQuality(q); }
+    function setQuality(q) { renderer.setPixelRatio(q === 'low' ? 1 : Math.min(devicePixelRatio || 1, 1.5)); if (q === 'low') setEffectsEnabled(false); resize(); container.dataset.quality = q; if (opts.onQuality) opts.onQuality(q); }
 
     /* ---------- resize: always follow the container ---------- */
     function resize() {
@@ -220,9 +237,10 @@
     }
 
     /* ---------- main loop ---------- */
-    let t = 0, last = performance.now(), raf, frames = 0, acc = 0, lowStreak = 0, pickClock = 0;
+    let t = 0, last = performance.now(), raf = null, frames = 0, acc = 0, lowStreak = 0, pickClock = 0;
     const tmp = new T.Color();
     function frame(now) {
+      if (document.hidden) { raf = null; return; }
       raf = requestAnimationFrame(frame);
       const dt = Math.min(0.1, (now - last) / 1000); last = now; t += dt; U.uTime.value = t;
       // idle: slow weightless float
@@ -242,9 +260,9 @@
         }
         r.glow += (g - r.glow) * 0.18; r.color.lerp(r.target, 0.2);
         const m = r.mats;
-        m.skin.uniforms.uColor.value.copy(r.color); m.skin.uniforms.uGlow.value = r.glow;
-        if (m.bone) { tmp.set(BASE.bone).lerp(r.color, r.set ? 0.5 : 0); m.bone.uniforms.uColor.value.copy(tmp); m.bone.uniforms.uGlow.value = r.glow * 0.6; }
-        if (m.organ) { tmp.set(BASE.organ).lerp(r.color, r.set ? 0.4 : 0); m.organ.uniforms.uColor.value.copy(tmp); m.organ.uniforms.uGlow.value = r.glow * 0.6; }
+        if (m.skin && r.meshes.skin.visible) { m.skin.uniforms.uColor.value.copy(r.color); m.skin.uniforms.uGlow.value = r.glow; }
+        if (m.bone && r.meshes.bone.visible) { tmp.set(BASE.bone).lerp(r.color, r.set ? 0.5 : 0); m.bone.uniforms.uColor.value.copy(tmp); m.bone.uniforms.uGlow.value = r.glow * 0.6; }
+        if (m.organ && r.meshes.organ.visible) { tmp.set(BASE.organ).lerp(r.color, r.set ? 0.4 : 0); m.organ.uniforms.uColor.value.copy(tmp); m.organ.uniforms.uGlow.value = r.glow * 0.6; }
       });
       markerMeshes.forEach(m => { const s = m.userData.base * (1 + 0.18 * Math.sin(t * 4 + m.userData.phase)); m.scale.setScalar(s); if (m.userData.type === 'radiation_source') m.quaternion.copy(camera.quaternion); else m.rotation.y += dt; });
       if (fxOn && fx.radiation > 0.02) {                              // radiation: particles streaming across the body
@@ -256,14 +274,26 @@
       // auto quality guard: drop effects + pixel ratio if frames stay slow
       if (opts.autoQuality) { acc += dt; frames++; if (frames >= 90) { const fps = frames / acc; frames = 0; acc = 0; lowStreak = fps < 28 ? lowStreak + 1 : 0; if (lowStreak >= 2 && container.dataset.quality !== 'low') setQuality('low'); } }
     }
-    raf = requestAnimationFrame(frame);
+    function onVisibilityChange() {
+      if (document.hidden) { if (raf !== null) cancelAnimationFrame(raf); raf = null; }
+      else if (raf === null) { last = performance.now(); raf = requestAnimationFrame(frame); }
+    }
+    document.addEventListener('visibilitychange', onVisibilityChange);
+    if (!document.hidden) raf = requestAnimationFrame(frame);
     el.style.cursor = 'grab';
 
     return {
-      regions, setRegionColors, setHighlighted, setMarkers, focusRegion, resetView, setEffects, setEffectsEnabled, setAutonomous, setQuality,
+      regions, setRegionColors, setHighlighted, setMarkers, setModel, focusRegion, resetView, setEffects, setEffectsEnabled, setAutonomous, setQuality,
       getSelected: () => selectedId,
       triangleCount: () => pickables.reduce((n, m) => n + m.geometry.index.count / 3, 0),
-      destroy() { cancelAnimationFrame(raf); ro.disconnect(); unsubs.forEach(f => f()); renderer.dispose(); container.innerHTML = ''; }
+      destroy() {
+        if (raf !== null) cancelAnimationFrame(raf);
+        document.removeEventListener('visibilitychange', onVisibilityChange);
+        ro.disconnect(); unsubs.forEach(f => f());
+        pickables.forEach(mesh => { mesh.geometry.dispose(); mesh.material.dispose(); });
+        markerMeshes.forEach(mesh => mesh.material.dispose()); Object.values(geos).forEach(geo => geo.dispose());
+        pGeo.dispose(); particles.material.dispose(); renderer.dispose(); container.innerHTML = '';
+      }
     };
   }
   window.Twin = { create };

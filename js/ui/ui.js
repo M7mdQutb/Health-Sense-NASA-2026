@@ -32,12 +32,25 @@
   const cache = {};
   function mount(id, html, key) {
     const k = key === undefined ? html : key; if (cache[id] === k) return;
-    cache[id] = k; const el = document.getElementById(id); if (el) el.innerHTML = typeof html === 'function' ? html() : html;
+    cache[id] = k; const el = document.getElementById(id);
+    if (el) {
+      const active = el.contains(document.activeElement) ? document.activeElement : null;
+      const focusState = active && active.id ? { id: active.id, value: ('value' in active) ? active.value : undefined, start: typeof active.selectionStart === 'number' ? active.selectionStart : null, end: typeof active.selectionEnd === 'number' ? active.selectionEnd : null } : null;
+      el.innerHTML = typeof html === 'function' ? html() : html;
+      if (focusState) {
+        const next = document.getElementById(focusState.id);
+        if (next) {
+          if (focusState.value !== undefined && 'value' in next && next.value !== focusState.value) next.value = focusState.value;
+          next.focus({ preventScroll: true });
+          if (focusState.start !== null && typeof next.setSelectionRange === 'function') { try { next.setSelectionRange(focusState.start, focusState.end); } catch (_) {} }
+        }
+      }
+    }
   }
 
   /* ---------- local UI state (never in the shared store) ---------- */
   const U = { logOpen: false, draft: { severity: null, type: 'pain', note: '' }, done: null, calibOpen: false, calib: { sleep: 3, mood: 3, stress: 3 }, treeOpen: false,
-    handoff: false, alerts: [], intake: 1800, physio: null };
+    handoff: false, alerts: [], intake: 1800, physio: null, co2Draft: null, co2Dirty: false, co2Error: '' };
 
   /* ---------- panels ---------- */
   function topBar() {
@@ -99,11 +112,19 @@
     const e = store.get().environment, g = (v, lo, hi) => Math.max(0, Math.min(1, (v - lo) / (hi - lo)));
     const rings = ring('ppCO₂', e.ppCO2, g(e.ppCO2, 0, 6), e.status.ppCO2, [0, TH.ppCO2.max / 6]) + ring('ppO₂', e.ppO2, g(e.ppO2, 100, 200), e.status.ppO2, [(TH.ppO2.min - 100) / 100, (TH.ppO2.max - 100) / 100]) +
       ring('Temp °C', e.temp, g(e.temp, 0, 40), e.status.temp, [TH.temp.min / 40, TH.temp.max / 40]);
-    return panel('Cabin environment', `<div class="rings">${rings}</div><p class="muted" style="font-size:.8rem;margin:8px 0">Limits: ppCO₂ &lt; ${TH.ppCO2.max} · ppO₂ ${TH.ppO2.min}–${TH.ppO2.max} mmHg · ${TH.temp.min}–${TH.temp.max} °C</p>` +
-      `<p style="margin:6px 0 4px">Today’s intake ${U.intake} of ${TH.nutrition.baseline} ${TH.nutrition.unit} baseline</p><div class="bar" role="img" aria-label="Intake ${U.intake} of ${TH.nutrition.baseline} kcal"><i style="width:${Math.min(100, U.intake / TH.nutrition.baseline * 100).toFixed(0)}%"></i></div>`,
-      `<span class="badges" style="margin:0">${src()}${src('eclss-ochmo')}</span>`);
+    const draft = U.co2Dirty && U.co2Draft !== null ? U.co2Draft : e.ppCO2.toFixed(2);
+    const manualForm = `<form class='co2-control' id='co2-manual-form'>` +
+      `<div class='co2-field'><label for='manual-co2'>Manual ppCO₂ value <small>mmHg</small></label>` +
+      `<input id='manual-co2' name='ppco2' type='number' inputmode='decimal' min='0' max='20' step='0.01' required value='${esc(draft)}' aria-describedby='co2-input-help'></div>` +
+      `<p class='help' id='co2-input-help'>Range: 0–20 mmHg. Applying holds ppCO₂ at this value; ppO₂ and temperature keep simulating. This is a demo input, not a sensor reading.</p>` +
+      (U.co2Error ? `<p class='field-error' role='alert'>${esc(U.co2Error)}</p>` : '') +
+      `<div class='co2-actions'><button class='sm' type='submit'>Apply value</button>` +
+      (e.manualCO2 ? `<button class='ghost sm' type='button' data-act='co2-auto'>Resume automatic</button>` : '') + `</div></form>`;
+    return panel('Cabin environment', `<div class='rings'>${rings}</div><p class='muted' style='font-size:.8rem;margin:8px 0'>Limits: ppCO₂ &lt; ${TH.ppCO2.max} · ppO₂ ${TH.ppO2.min}–${TH.ppO2.max} mmHg · ${TH.temp.min}–${TH.temp.max} °C</p>` +
+      (e.manualCO2 ? `<p class='co2-mode'><span class='src manual'>Manual ppCO₂ override active</span> Automatic CO₂ updates are paused.</p>` : '') + manualForm +
+      `<p style='margin:6px 0 4px'>Today’s intake ${U.intake} of ${TH.nutrition.baseline} ${TH.nutrition.unit} baseline</p><div class='bar' role='img' aria-label='Intake ${U.intake} of ${TH.nutrition.baseline} kcal'><i style='width:${Math.min(100, U.intake / TH.nutrition.baseline * 100).toFixed(0)}%'></i></div>`,
+      `<span class='badges' style='margin:0'>${e.manualCO2 ? `<span class='src manual' title='Entered manually; not measured by a sensor'>✎ Manual ppCO₂</span>` : src()}${src('eclss-ochmo')}</span>`);
   }
-
   function alerts() {
     return panel('Alerts', U.alerts.length ? U.alerts.map(a => toast(a.level, `${a.text}<small>${new Date(a.t).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })} ${src(a.sourceId)}</small>`)).join('') : `<div class="empty">No alerts. Cabin readings are being watched.</div>`);
   }
@@ -177,7 +198,9 @@
   /* ---------- render all ---------- */
   function render() {
     const s = store.get();
-    mount('top', topBar()); mount('p-card', regionCard(), regionCard());
+    mount('top', topBar()); mount('p-card', regionCard());
+    const modelHint = document.getElementById('model-hint'), activeView = Layers.MODEL_VIEWS[s.ui.activeSystem];
+    if (modelHint && activeView && modelHint.textContent !== activeView.description) modelHint.textContent = activeView.description;
     const sel = s.ui.selectedRegion;
     if (U.logOpen && sel) mount('p-log', logSheet, `log|${sel}|${U.done}|${U.done ? Date.now() < (Logging.last ? Logging.last.until : 0) : ''}|${Logging.last ? Logging.last.id : ''}`);
     else mount('p-log', '', 'off');
@@ -205,9 +228,19 @@
       else if (a === 'sync-rest') Gamification.syncRestCycle(); else if (a === 'meal') { U.intake = Math.min(TH.nutrition.baseline, U.intake + 600); Gamification.logNutrition(); }
       else if (a === 'calib-open') U.calibOpen = true; else if (a === 'calib-cancel') U.calibOpen = false;
       else if (a === 'calib-done') { U.calibOpen = false; Gamification.completeCheckin(Object.assign({}, U.calib)); }
+      else if (a === 'co2-auto') { actions.resumeCO2Simulation(); U.co2Draft = null; U.co2Dirty = false; U.co2Error = ''; }
       else if (a === 'sources') openSources();
       else if (a.startsWith('sim-')) DEMO[a.slice(4)]();
       cache['p-log'] = null; render();
+    });
+    document.addEventListener('submit', e => {
+      if (e.target.id !== 'co2-manual-form') return;
+      e.preventDefault();
+      const input = document.getElementById('manual-co2');
+      const result = actions.setManualCO2(input ? input.value : NaN);
+      if (!result.ok) { U.co2Error = result.error; render(); return; }
+      U.co2Draft = result.value.toFixed(2); U.co2Dirty = false; U.co2Error = '';
+      render();
     });
     document.addEventListener('change', e => {
       const t = e.target;
@@ -218,7 +251,8 @@
     });
     document.addEventListener('input', e => {
       const t = e.target;
-      if (t.id === 'log-note') U.draft.note = t.value;
+      if (t.id === 'manual-co2') { U.co2Draft = t.value; U.co2Dirty = true; U.co2Error = ''; }
+      else if (t.id === 'log-note') U.draft.note = t.value;
       else if (t.dataset.calib) { U.calib[t.dataset.calib] = +t.value; const o = document.getElementById('cv-' + t.dataset.calib); if (o) o.textContent = t.value; }
     });
     document.addEventListener('toggle', e => { if (e.target.matches && e.target.matches('[data-tree]')) U.treeOpen = e.target.open; }, true);
@@ -238,12 +272,15 @@
   }
 
   function init() {
-    const layers = C.SYSTEMS.map((x, i) => `<input type="radio" name="layer" id="l${i}" value="${x}"><label for="l${i}">${esc(Layers.SYS_LABEL[x])}</label>`).join('');
+    const layers = C.SYSTEMS.map((x, i) => {
+      const view = Layers.MODEL_VIEWS[x], id = `l${i}`;
+      return `<input type='radio' name='layer' id='${id}' value='${x}' aria-label='${esc(Layers.SYS_LABEL[x])} model view' title='${esc(view.description)}'><label for='${id}' title='${esc(view.description)}'>${esc(Layers.SYS_LABEL[x])}</label>`;
+    }).join('');
     document.body.innerHTML = `<div class="shell"><header class="panel hud a-top" id="top"></header>` +
       `<aside class="col a-left"><section class="panel" id="p-crew"></section><section class="panel" id="p-rad"></section><section class="panel" id="p-sim"></section></aside>` +
-      `<section class="panel a-center"><header><h2>Digital twin</h2><span class="hint">Drag to rotate · tap a region</span></header><div class="stage" id="stage"></div></section>` +
+      `<section class="panel a-center"><header><h2>Digital twin</h2><span class="hint" id="model-hint">${esc(Layers.MODEL_VIEWS[store.get().ui.activeSystem].description)}</span></header><div class="stage" id="stage"></div></section>` +
       `<aside class="col a-right"><section class="panel" id="p-card"></section><section class="panel" id="p-log" hidden></section><section class="panel" id="p-cabin"></section><section class="panel" id="p-alerts"></section><section class="panel" id="p-triage"></section><section class="panel" id="p-hist"></section></aside>` +
-      `<nav class="layers a-layers" aria-label="Body system layer">${layers}</nav><div class="disc a-disc">Demo only. Not a medical device. All figures are simulated unless a source badge says otherwise.</div></div>`;
+      `<nav class="layers a-layers" aria-label="Body-system model view">${layers}</nav><div class="disc a-disc">Demo only. Not a medical device. All figures are simulated unless a source badge says otherwise.</div></div>`;
     wire(); store.subscribe(schedule); render();
     Core.loaders.loadPhysio().then(r => { let i = 0; U.physio = r.rows[0]; setInterval(() => { U.physio = r.rows[i++ % r.rows.length]; live(); }, 1000); });
   }

@@ -9,6 +9,17 @@ if "--fetch" in sys.argv:
     print("saved vendor/three.min.js")
 PORT = int(os.environ.get("PORT", 8000))
 class H(http.server.SimpleHTTPRequestHandler):
-    def end_headers(self): self.send_header("Cache-Control", "no-store"); super().end_headers()
-with socketserver.TCPServer(("", PORT), H) as s:
+    def end_headers(self):
+        path = self.path.split("?", 1)[0]
+        if path == "/" or path.endswith(".html"):
+            self.send_header("Cache-Control", "no-cache")
+        else:
+            self.send_header("Cache-Control", "public, max-age=60, must-revalidate")
+        super().end_headers()
+
+class Server(socketserver.ThreadingTCPServer):
+    allow_reuse_address = True
+    daemon_threads = True
+
+with Server(("", PORT), H) as s:
     print(f"Serving on http://localhost:{PORT}  (Ctrl+C to stop)"); s.serve_forever()

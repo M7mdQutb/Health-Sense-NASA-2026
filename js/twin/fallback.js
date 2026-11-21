@@ -37,6 +37,11 @@
           const c = el('circle', { cx: x + (i - 1) * 10, cy: y, r: 4 + 7 * (m.intensity == null ? .5 : m.intensity), class: 'mk ' + (m.type || 'symptom') }); markerG.appendChild(c); });
       },
       setHighlighted() {}, setEffects() {}, setEffectsEnabled() {}, setQuality() {}, focusRegion() {}, resetView() {},
+      setModel(system, profile) {
+        const focus = new Set(profile && profile.focusRegions ? profile.focusRegions : C.REGIONS);
+        C.REGIONS.forEach(id => { shapes[id].style.opacity = focus.has(id) ? '0.95' : '0.18'; });
+        svg.dataset.model = system;
+      },
       setAutonomous(on) { container.classList.toggle('twin--autonomous', !!on); },
       destroy() { unsub(); container.innerHTML = ''; }
     };

@@ -146,8 +146,8 @@
     gamification: { xp: 340, level: 4, badges: ['first-checkin'], unlockedNodes: ['root'], crewGoal: { title: 'Crew countermeasure streak', target: 12, progress: 5 } },
     ui: { activeSystem: 'skeletal', selectedRegion: null, openPanel: null },
     environment: {
-      ppCO2: 2.6, ppO2: 150, temp: 22.5, source: 'simulated', history: [],
-      status: { ppCO2: 'caution', ppO2: 'nominal', temp: 'nominal' }
+      ppCO2: 2.6, ppO2: 150, temp: 22.5, source: 'simulated', manualCO2: false, history: [],
+      status: { ppCO2: 'nominal', ppO2: 'nominal', temp: 'nominal' }
     },
     radiation: { cumulative_mSv: 38, warnLimit: TO_VERIFY.radiationWarnLimit, doseRate_mSv_day: 0.5, source: 'simulated' },
     sleep: {
@@ -221,6 +221,17 @@
         if (rank[status[k]] > rank[prev.status[k]]) A.raiseAlert('closed_env', status[k], THRESHOLDS[k].sourceId);
       });
     },
+    setManualCO2(value) {
+      const n = Number(value);
+      if (!Number.isFinite(n) || n < 0 || n > 20) return { ok: false, error: 'Enter a CO₂ value between 0 and 20 mmHg.' };
+      const rounded = +n.toFixed(2);
+      A.updateEnvironment({ ppCO2: rounded, source: 'manual', manualCO2: true });
+      return { ok: true, value: rounded };
+    },
+    resumeCO2Simulation() {
+      if (!store.get().environment.manualCO2) return;
+      A.updateEnvironment({ source: 'simulated', manualCO2: false });
+    },
     updateRadiation(patch) {
       const prev = store.get().radiation, next = Object.assign({}, prev, patch);
       store.set({ radiation: next });
@@ -241,11 +252,12 @@
     function tick() {
       const e = store.get().environment, r = store.get().radiation;
       const baseCO2 = 2.6 + co2Boost;
-      A.updateEnvironment({
-        ppCO2: +helpers.clamp(e.ppCO2 + (baseCO2 - e.ppCO2) * 0.25 + rnd(0.03), 0.3, 6).toFixed(2),
+      const patch = {
         ppO2: +(e.ppO2 + (150 - e.ppO2) * 0.2 + rnd(0.4)).toFixed(1),
         temp: +(e.temp + (22.5 - e.temp) * 0.1 + rnd(0.05)).toFixed(2)
-      });
+      };
+      if (!e.manualCO2) patch.ppCO2 = +helpers.clamp(e.ppCO2 + (baseCO2 - e.ppCO2) * 0.25 + rnd(0.03), 0.3, 6).toFixed(2);
+      A.updateEnvironment(patch);
       A.updateRadiation({ cumulative_mSv: +(r.cumulative_mSv + r.doseRate_mSv_day / 86400 * 60).toFixed(4) }); // 1 s tick ~ 1 min mission time (demo)
     }
     return {
