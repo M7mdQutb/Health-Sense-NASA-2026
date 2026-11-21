@@ -20,7 +20,7 @@
   // Supplied anatomy is grouped by body region, not by organ system.
   // Profiles select the closest available view and document structures not present as separate meshes.
   const MODEL_VIEWS = {
-    skeletal: { boneRegions: C.REGIONS.slice(), organRegions: [], focusRegions: ['spine', 'upper_back', 'lower_back', 'l_hip', 'r_hip', 'l_femur', 'r_femur', 'l_shoulder', 'r_shoulder'], skinOpacity: 0.14, description: 'Bones + translucent body shell' },
+    skeletal: { boneRegions: C.REGIONS.slice(), organRegions: [], focusRegions: ['spine', 'upper_back', 'lower_back', 'l_hip', 'r_hip', 'l_femur', 'r_femur', 'l_shoulder', 'r_shoulder'], showSkin: false, description: 'Skeleton only' },
     cardiovascular: { boneRegions: [], organRegions: ['chest'], focusRegions: ['head', 'neck', 'chest'], skinOpacity: 0.28, description: 'Chest organ region; the source mesh groups the heart with nearby organs' },
     nervous: { boneRegions: ['head', 'neck', 'spine'], organRegions: [], focusRegions: ['head', 'neck', 'spine'], skinOpacity: 0.16, description: 'Head, neck and spine landmarks; no separate brain mesh is supplied' },
     respiratory: { boneRegions: [], organRegions: ['chest', 'neck'], focusRegions: ['neck', 'chest'], skinOpacity: 0.28, description: 'Chest and neck organ regions; internal structures are grouped by body region' },

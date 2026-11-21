@@ -89,7 +89,7 @@
       const bones = new Set(profile.boneRegions || []), organs = new Set(profile.organRegions || []);
       C.REGIONS.forEach(id => {
         const r = regions[id];
-        if (r.meshes.skin) { r.meshes.skin.visible = true; r.meshes.skin.material.uniforms.uOpacity.value = Number.isFinite(profile.skinOpacity) ? profile.skinOpacity : 0.55; }
+        if (r.meshes.skin) { r.meshes.skin.visible = profile.showSkin !== false; r.meshes.skin.material.uniforms.uOpacity.value = Number.isFinite(profile.skinOpacity) ? profile.skinOpacity : 0.55; }
         if (r.meshes.bone) r.meshes.bone.visible = bones.has(id);
         if (r.meshes.organ) r.meshes.organ.visible = organs.has(id);
       });
