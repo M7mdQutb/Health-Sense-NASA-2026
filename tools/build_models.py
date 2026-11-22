@@ -104,17 +104,60 @@ def arm_weight(P):
     return smooth(np.abs(P[:, 0]) - x0, 0.0, 0.24) * (P[:, 1] < 2.45) * (P[:, 1] > 0.35)
 
 
-def lower_arms(P, deg=34.0, stretch=1.22):
-    """Shell is A-posed; skeleton arms hang down. Rotate arm vertices about each shoulder pivot."""
+SHOULDER = {1: (0.60, 2.25), -1: (-0.60, 2.25)}   # shoulder pivot per side (skeleton space)
+
+
+def fit_arm(P, SKV, sgn, used=None):
+    """Rotation (deg) and stretch that bring the shell's A-posed arm onto the skeleton's hanging arm, measured
+    hand tip -> hand tip from the shoulder pivot. The shell's two arms differ in length and pose, so each side
+    is fitted on its own (one fixed angle/stretch only suited one arm)."""
+    piv = np.array(SHOULDER[sgn])
+
+    def tip(A):
+        d = np.hypot(A[:, 0] - piv[0], A[:, 1] - piv[1])
+        v = A[np.argsort(-d)[:150]].mean(0)[:2] - piv
+        return np.hypot(*v), np.degrees(np.arctan2(sgn * v[0], -v[1]))   # length, angle from straight down (outward +)
+    ok = np.ones(len(P), bool) if used is None else used
+    len_s, ang_s = tip(P[ok & (np.sign(P[:, 0]) == sgn) & (arm_weight(P) > 0.5)])
+    sk = SKV[(np.sign(SKV[:, 0]) == sgn) & (np.abs(SKV[:, 0]) > 0.62) & (SKV[:, 1] > -1.0) & (SKV[:, 1] < 2.4)]
+    len_k, ang_k = tip(sk)
+    return ang_s - ang_k, len_k / len_s
+
+
+def lower_arms(P, params):
+    """Shell is A-posed; skeleton arms hang down. Rotate arm vertices about each shoulder pivot.
+    params = {sgn: (deg, stretch)} from fit_arm()."""
     out = P.copy()
     for sgn in (1, -1):
-        piv = np.array([sgn * 0.60, 2.25]); d = P[:, [0, 1]] - piv
+        deg, stretch = params[sgn]
+        piv = np.array(SHOULDER[sgn]); d = P[:, [0, 1]] - piv
         w = arm_weight(P) * (np.sign(P[:, 0]) == sgn)
         a = np.radians(deg) * w * (-sgn)
         c, s_ = np.cos(a), np.sin(a)
-        k = 1 + (stretch - 1) * w                      # skeleton arms are longer than the shell's
+        k = 1 + (stretch - 1) * w
         out[:, 0] = np.where(w > 0, piv[0] + k * (d[:, 0] * c - d[:, 1] * s_), out[:, 0])
         out[:, 1] = np.where(w > 0, piv[1] + k * (d[:, 0] * s_ + d[:, 1] * c), out[:, 1])
+    return out
+
+
+def match_arm_axis(P2, w_all, used, SKV):
+    """After lowering, slide each arm sideways / in depth, height band by height band, so its centreline follows
+    the skeleton's arm (the shell arms are bent at the elbow, a straight rotation cannot follow that). The
+    correction fades out towards the shoulder so the shoulder/torso join is left alone."""
+    out = P2.copy(); edges = np.arange(-0.9, 2.3, 0.3)
+    fade = smooth(2.15 - P2[:, 1], 0.0, 0.5)
+    for sgn in (1, -1):
+        side = np.sign(P2[:, 0]) == sgn
+        m = used & side & (w_all > 0.5)
+        sk = SKV[(np.sign(SKV[:, 0]) == sgn) & (np.abs(SKV[:, 0]) > 0.62) & (SKV[:, 1] > -1.0) & (SKV[:, 1] < 2.3)]
+        for axis in (0, 2):
+            ctr, dv = [], []
+            for lo in edges[:-1]:
+                a = m & (P2[:, 1] >= lo) & (P2[:, 1] < lo + 0.3); b = (sk[:, 1] >= lo) & (sk[:, 1] < lo + 0.3)
+                if a.sum() >= 5 and b.sum() >= 5:
+                    ctr.append(lo + 0.15); dv.append(np.median(sk[b, axis]) - np.median(P2[a, axis]))
+            if ctr:
+                out[:, axis] += w_all * side * fade * np.interp(P2[:, 1], ctr, dv)
     return out
 
 
@@ -224,7 +267,7 @@ def skeleton_pos_labels(C):
     d = np.minimum(np.hypot(x - .6, y - 2.25), np.hypot(x + .6, y - 2.25))
     sh = (d < .5) & (y > 0.9)
     R[sh] = np.char.add(sd, "shoulder")[sh]
-    arm = (ax > 0.65) & (y > -0.5) & ~sh
+    arm = (ax > 0.65) & (y > -1.0) & ~sh          # hands hang down to y~-0.8
     R[arm] = np.char.add(sd, "arm")[arm]
     return R
 
@@ -266,7 +309,11 @@ def main():
         put("organ", Vd, Fd, lab)
     # skin shell (arms classified in the original A-pose, then lowered)
     V, G = load_obj(f"{ROOT}/models/body_shell.obj"); F = np.vstack(list(G.values())); print("shell verts", len(V), "faces", len(F))
-    P = straighten_z(reg_shell(V), SKV); P2 = lower_arms(P)
+    P = straighten_z(reg_shell(V), SKV)
+    used = np.zeros(len(P), bool); used[F.ravel()] = True
+    params = {sg: fit_arm(P, SKV, sg, used) for sg in (1, -1)}
+    print("arm fit (rotation deg, stretch):", {("l" if k == 1 else "r"): tuple(round(float(x), 2) for x in v) for k, v in params.items()})
+    P2 = lower_arms(P, params)
     w_all = arm_weight(P); ref = SKV[(np.abs(SKV[:, 0]) > 0.7) & (SKV[:, 1] > 0) & (SKV[:, 1] < 1.7)]
     # This shell has its arms swinging in depth (one back, one forward), growing from shoulder to hand.
     # Level each arm with the skeleton arm using its own depth profile along the arm (distance from the
@@ -282,6 +329,7 @@ def main():
         prof = np.interp(d, ctr[ok], med[ok])
         zt = np.median(ref[np.sign(ref[:, 0]) == sgn, 2])
         P2[:, 2] += w_all * side * smooth(d, 0.0, 0.8) * (zt - prof)
+    P2 = match_arm_axis(P2, w_all, used, SKV)
     Cb = P[F].mean(1)
     armflag = arm_weight(Cb) > 0.5
     C2 = P2[F].mean(1); lab = classify(C2, arm_hint=armflag)
