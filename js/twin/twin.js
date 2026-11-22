@@ -6,7 +6,10 @@
      setMarkers([{region, intensity:0..1, type:'symptom'|'env_alert'|'radiation_source'}])   ← Task 4
      focusRegion(id) · resetView() · setEffects({...}) · setEffectsEnabled(bool)
      setAutonomous(bool) · setQuality('high'|'low') · destroy()
-   Depends on: window.THREE (r128), window.Core (Task 1), window.TWIN_DATA (python build).
+     setMuscleOptions({tendons:bool|0..1, fibres:bool|0..1})   ← muscle texture toggles
+   Body surface = the muscles model (muscles.js), split into one mesh per region. The old body_shell ("skin") meshes are no longer used.
+   Depends on: window.THREE (r128), window.Core (Task 1), window.TWIN_DATA (python build: bone / organ / centre / radius),
+               window.createMuscles (muscles.js), window.MUSCLE_REGIONS (tools/build_muscle_regions.py -> data/muscle_regions.js).
    ============================================================ */
 (function () {
   'use strict';
@@ -27,9 +30,10 @@
       vec3 amber = vec3(1.0, 0.69, 0.18); col = mix(col, amber*(0.35 + rim), uAuto*0.4);
       gl_FragColor = vec4(col + uGlow*0.25*uSolid, clamp(a, 0.0, 1.0));
     }`;
-  function makeMat(color, solid, opacity) {
+  function makeMat(color, solid, opacity, overlay) {
     return new T.ShaderMaterial({
       vertexShader: VERT, fragmentShader: FRAG, side: T.DoubleSide, transparent: !solid, depthWrite: solid,
+      polygonOffset: !!overlay, polygonOffsetFactor: -2, polygonOffsetUnits: -2,      // overlay sits on the muscle surface without z-fighting
       uniforms: { uColor: { value: new T.Color(color) }, uGlow: { value: 0 }, uOpacity: { value: opacity || 0.5 }, uSolid: { value: solid ? 1 : 0 }, uTime: U.uTime, uAuto: U.uAuto }
     });
   }
@@ -45,6 +49,38 @@
     g.computeVertexNormals(); return g;
   }
 
+  /* muscles.js is ONE mesh. Place it in the body_data coordinate system (verified by tools/build_muscle_regions.py). */
+  const MUSCLE_HEIGHT = 2.0, MUSCLE_Y = -0.9996;
+
+  /* Split the muscles mesh into one BufferGeometry per region. labels = one region index per vertex (MUSCLE_REGIONS.v).
+     A triangle goes to the region of the majority of its vertices. Normals / tendon / fibre attributes are copied, so shading has no seams. */
+  function splitMuscles(full, mr, wanted) {
+    const lab = new Uint8Array(b64(mr.v)), A = full.attributes, nv = A.position.count;
+    if (lab.length !== nv) throw new Error('Twin: muscle_regions.js has ' + lab.length + ' labels but muscles.js has ' + nv + ' vertices - re-run tools/build_muscle_regions.py');
+    const P = A.position.array, N = A.normal.array, TD = A.tend.array, FD = A.fdir.array, IX = full.index.array, nt = IX.length / 3;
+    const tris = {};
+    for (let t = 0; t < nt; t++) {
+      const la = lab[IX[3 * t]], lb = lab[IX[3 * t + 1]], lc = lab[IX[3 * t + 2]], id = mr.ids[lb === lc ? lb : la];
+      (tris[id] || (tris[id] = [])).push(t);
+    }
+    const remap = new Int32Array(nv).fill(-1), out = {};
+    wanted.forEach(id => {
+      const list = tris[id]; if (!list) return;
+      const verts = [];
+      list.forEach(t => { for (let k = 0; k < 3; k++) { const v = IX[3 * t + k]; if (remap[v] < 0) { remap[v] = verts.length; verts.push(v); } } });
+      const n = verts.length, pos = new Float32Array(n * 3), nor = new Float32Array(n * 3), td = new Float32Array(n), fd = new Float32Array(n * 3);
+      const ix = n < 65536 ? new Uint16Array(list.length * 3) : new Uint32Array(list.length * 3);
+      verts.forEach((v, i) => { for (let k = 0; k < 3; k++) { pos[i * 3 + k] = P[v * 3 + k]; nor[i * 3 + k] = N[v * 3 + k]; fd[i * 3 + k] = FD[v * 3 + k]; } td[i] = TD[v]; });
+      list.forEach((t, i) => { for (let k = 0; k < 3; k++) ix[i * 3 + k] = remap[IX[3 * t + k]]; });
+      verts.forEach(v => { remap[v] = -1; });
+      const g = new T.BufferGeometry();
+      g.setAttribute('position', new T.BufferAttribute(pos, 3)); g.setAttribute('normal', new T.BufferAttribute(nor, 3));
+      g.setAttribute('tend', new T.BufferAttribute(td, 1)); g.setAttribute('fdir', new T.BufferAttribute(fd, 3));
+      g.setIndex(new T.BufferAttribute(ix, 1)); out[id] = g;
+    });
+    return out;
+  }
+
   const css = n => getComputedStyle(document.documentElement).getPropertyValue(n).trim() || null;
   /* INTEGRATION PATCH: body base colours come from the palette tokens (css/tokens.css) */
   const BASE = { skin: css('--twin-skin') || '#92C1AD', bone: css('--twin-bone') || '#EBFDFD', organ: css('--twin-organ') || '#C7E8DF' };
@@ -52,6 +88,7 @@
   const MARKER_STYLE = { symptom: { color: '#ff5a64' }, env_alert: { color: '#ffb02e' }, radiation_source: { color: '#b68cff' } };
 
   function create(container, opts) {
+    if (typeof window.createMuscles !== 'function' || !window.MUSCLE_REGIONS) throw new Error('Twin: load muscles.js and data/muscle_regions.js before Twin.create()');
     opts = Object.assign({ bindToStore: true, autoQuality: true, effects: true }, opts || {});
     const reduceMotion = matchMedia('(prefers-reduced-motion: reduce)').matches;
     container.classList.add('twin');
@@ -63,19 +100,35 @@
     const el = renderer.domElement; el.className = 'twin-canvas'; container.appendChild(el);
     const scene = new T.Scene(), camera = new T.PerspectiveCamera(38, 1, 0.05, 50);
     const body = new T.Group(); scene.add(body);
+    /* muscles use a lit material (the hologram shaders ignore lights): the light rig turns with the camera azimuth, so the front is always lit */
+    const lightRig = new T.Group(); scene.add(lightRig);
+    lightRig.add(new T.HemisphereLight(0xcfe6ff, 0x40202a, 0.75));
+    const keyLight = new T.DirectionalLight(0xffffff, 1.1); keyLight.position.set(2, 4, 5); lightRig.add(keyLight);
+    const rimLight = new T.DirectionalLight(0x5fe0d6, 0.6); rimLight.position.set(-3, 2, -3); lightRig.add(rimLight);
 
-    /* build regions: 3 meshes max per region (skin / bone / organ) */
+    /* build regions: muscle mesh (+ status overlay) from muscles.js, bone / organ meshes from body_data.js */
     const regions = {}, pickables = [];
     let activePickables = pickables;
+    const proto = window.createMuscles(T, { height: MUSCLE_HEIGHT }), muscleMat = proto.material, MU = proto.userData.uniforms;
+    const muscleGeos = splitMuscles(proto.geometry, window.MUSCLE_REGIONS, C.REGIONS);
+    const muscleRoot = new T.Group(); muscleRoot.position.y = MUSCLE_Y; body.add(muscleRoot);
     C.REGIONS.forEach(id => {
       const d = window.TWIN_DATA.regions[id], g = new T.Group(); g.name = id; body.add(g);
-      const r = regions[id] = { id, data: d, group: g, color: new T.Color(BASE.skin), target: new T.Color(BASE.skin), glow: 0, mats: {}, meshes: {}, set: false };
-      [['skin', false, 0.55, 1], ['bone', true, 1, 0], ['organ', true, 1, 0]].forEach(([kind, solid, op, order]) => {
+      const r = regions[id] = { id, data: d, group: g, color: new T.Color(BASE.skin), target: new T.Color(BASE.skin), glow: 0, ov: 0, mats: {}, meshes: {}, set: false };
+      if (muscleGeos[id]) {
+        const mesh = new T.Mesh(muscleGeos[id], muscleMat); mesh.name = id + '_muscles'; mesh.userData.region = id; mesh.renderOrder = 1;
+        muscleRoot.add(mesh); r.meshes.muscle = mesh; pickables.push(mesh);
+        /* hologram overlay on the same geometry: carries the status colour, hover / selection glow. Invisible while idle. */
+        const ov = r.mats.overlay = makeMat(BASE.skin, false, 0, true); ov.uniforms.uOpacity.value = 0;
+        const over = r.meshes.overlay = new T.Mesh(muscleGeos[id], ov); over.renderOrder = 3; over.visible = false; muscleRoot.add(over);
+      }
+      [['bone', true, 1], ['organ', true, 1]].forEach(([kind, solid, op]) => {
         if (!d[kind]) return;
         const m = r.mats[kind] = makeMat(BASE[kind], solid, op), mesh = new T.Mesh(geometry(d[kind]), m);
-        r.meshes[kind] = mesh; mesh.userData.region = id; mesh.renderOrder = kind === 'skin' ? 3 : 1; g.add(mesh); pickables.push(mesh);
+        r.meshes[kind] = mesh; mesh.userData.region = id; mesh.renderOrder = 1; mesh.visible = false; g.add(mesh); pickables.push(mesh);   // shown by setModel()
       });
     });
+    activePickables = pickables.filter(mesh => mesh.visible);
     const defaultCol = new T.Color(BASE.skin);
     function resolveColor(v) {
       if (C.STATUS && ['nominal', 'caution', 'critical'].includes(v)) v = css('--color-' + v) || { nominal: '#5EE6EE', caution: '#FFB020', critical: '#FF5C63' }[v];
@@ -83,19 +136,29 @@
     }
 
     let currentModel = null;
+    /* profile: boneRegions[], organRegions[], showMuscles (alias: showSkin, default true), muscleOpacity (alias: skinOpacity).
+       Opacity default: 1 when only muscles are shown, 0.3 (see-through) when bones / organs are shown inside. */
     function setModel(system, profile) {
       if (currentModel === system) return;
       profile = profile || {};
       const bones = new Set(profile.boneRegions || []), organs = new Set(profile.organRegions || []);
+      const showM = profile.showMuscles !== undefined ? profile.showMuscles !== false : profile.showSkin !== false;
+      const op = Number.isFinite(profile.muscleOpacity) ? profile.muscleOpacity : Number.isFinite(profile.skinOpacity) ? profile.skinOpacity : (bones.size || organs.size) ? 0.3 : 1;
+      muscleMat.transparent = op < 0.98; muscleMat.opacity = op; muscleMat.depthWrite = op >= 0.98; muscleMat.needsUpdate = true;
       C.REGIONS.forEach(id => {
         const r = regions[id];
-        if (r.meshes.skin) { r.meshes.skin.visible = profile.showSkin !== false; r.meshes.skin.material.uniforms.uOpacity.value = Number.isFinite(profile.skinOpacity) ? profile.skinOpacity : 0.55; }
+        if (r.meshes.muscle) r.meshes.muscle.visible = showM;
         if (r.meshes.bone) r.meshes.bone.visible = bones.has(id);
         if (r.meshes.organ) r.meshes.organ.visible = organs.has(id);
       });
       activePickables = pickables.filter(mesh => mesh.visible);
       container.dataset.model = system;
       currentModel = system;
+    }
+    function setMuscleOptions(o) {
+      o = o || {}; const f = v => Math.min(1, Math.max(0, +v));
+      if (o.tendons !== undefined) MU.uTendon.value = f(o.tendons);
+      if (o.fibres !== undefined) MU.uFiber.value = f(o.fibres);
     }
 
     /* ---------- camera rig (own orbit controls: drag / wheel / pinch, limits, smooth focus) ---------- */
@@ -114,6 +177,7 @@
       const sp = Math.sin(cur.pol);
       camera.position.set(cur.tx + cur.dist * sp * Math.sin(cur.az), cur.ty + cur.dist * Math.cos(cur.pol), cur.tz + cur.dist * sp * Math.cos(cur.az));
       camera.lookAt(cur.tx, cur.ty, cur.tz);
+      lightRig.rotation.y = cur.az;
     }
     function resetView() { setGoal(Object.assign({}, HOME, { az: wrapNear(HOME.az, cur.az) })); }
     function focusRegion(id) {
@@ -247,7 +311,7 @@
       if (!reduceMotion) { body.position.y = Math.sin(t * 0.55) * 0.018; body.rotation.z = Math.sin(t * 0.33) * 0.012; body.rotation.y = Math.sin(t * 0.21) * 0.025; }
       applyCamera(dt);
       // throttled hover picking
-      pickClock += dt; if (needPick && pickClock > 0.05 && lastMove && !ptrs.size) { pickClock = 0; needPick = false; setHover(pick(lastMove), lastMove); }
+      pickClock += dt; if (needPick && pickClock > 0.08 && lastMove && !ptrs.size) { pickClock = 0; needPick = false; setHover(pick(lastMove), lastMove); }
       const fxOn = fx.enabled && !reduceMotion;
       const breathe = 0.5 + 0.5 * Math.sin(t * (1.2 + fx.respiratory * 1.6));
       C.REGIONS.forEach(id => {
@@ -260,7 +324,11 @@
         }
         r.glow += (g - r.glow) * 0.18; r.color.lerp(r.target, 0.2);
         const m = r.mats;
-        if (m.skin && r.meshes.skin.visible) { m.skin.uniforms.uColor.value.copy(r.color); m.skin.uniforms.uGlow.value = r.glow; }
+        if (m.overlay) {                                              // status colour / glow on top of the muscles
+          r.ov += ((r.set ? 0.6 : 0) - r.ov) * 0.18;
+          const show = r.meshes.muscle.visible && (r.ov > 0.01 || r.glow > 0.01); r.meshes.overlay.visible = show;
+          if (show) { const u = m.overlay.uniforms; u.uColor.value.copy(r.color); u.uGlow.value = r.glow; u.uOpacity.value = r.ov; }
+        }
         if (m.bone && r.meshes.bone.visible) { tmp.set(BASE.bone).lerp(r.color, r.set ? 0.5 : 0); m.bone.uniforms.uColor.value.copy(tmp); m.bone.uniforms.uGlow.value = r.glow * 0.6; }
         if (m.organ && r.meshes.organ.visible) { tmp.set(BASE.organ).lerp(r.color, r.set ? 0.4 : 0); m.organ.uniforms.uColor.value.copy(tmp); m.organ.uniforms.uGlow.value = r.glow * 0.6; }
       });
@@ -283,7 +351,7 @@
     el.style.cursor = 'grab';
 
     return {
-      regions, setRegionColors, setHighlighted, setMarkers, setModel, focusRegion, resetView, setEffects, setEffectsEnabled, setAutonomous, setQuality,
+      regions, setRegionColors, setHighlighted, setMarkers, setModel, setMuscleOptions, focusRegion, resetView, setEffects, setEffectsEnabled, setAutonomous, setQuality,
       getSelected: () => selectedId,
       triangleCount: () => pickables.reduce((n, m) => n + m.geometry.index.count / 3, 0),
       destroy() {
@@ -291,6 +359,7 @@
         document.removeEventListener('visibilitychange', onVisibilityChange);
         ro.disconnect(); unsubs.forEach(f => f());
         pickables.forEach(mesh => { mesh.geometry.dispose(); mesh.material.dispose(); });
+        Object.values(regions).forEach(r => { if (r.mats.overlay) r.mats.overlay.dispose(); }); muscleMat.dispose();
         markerMeshes.forEach(mesh => mesh.material.dispose()); Object.values(geos).forEach(geo => geo.dispose());
         pGeo.dispose(); particles.material.dispose(); renderer.dispose(); container.innerHTML = '';
       }

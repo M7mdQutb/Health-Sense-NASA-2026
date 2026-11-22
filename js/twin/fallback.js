@@ -36,7 +36,7 @@
         (list || []).forEach(m => { if (!SHAPES[m.region]) return; const i = n[m.region] = (n[m.region] || 0) + 1, [x, y] = centre(SHAPES[m.region]);
           const c = el('circle', { cx: x + (i - 1) * 10, cy: y, r: 4 + 7 * (m.intensity == null ? .5 : m.intensity), class: 'mk ' + (m.type || 'symptom') }); markerG.appendChild(c); });
       },
-      setHighlighted() {}, setEffects() {}, setEffectsEnabled() {}, setQuality() {}, focusRegion() {}, resetView() {},
+      setHighlighted() {}, setEffects() {}, setEffectsEnabled() {}, setQuality() {}, focusRegion() {}, resetView() {}, setMuscleOptions() {},   // setMuscleOptions: 3D-only, kept for API parity with Twin.create()
       setModel(system, profile) {
         const focus = new Set(profile && profile.focusRegions ? profile.focusRegions : C.REGIONS);
         C.REGIONS.forEach(id => { shapes[id].style.opacity = focus.has(id) ? '0.95' : '0.18'; });
