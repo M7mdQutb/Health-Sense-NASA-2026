@@ -91,9 +91,17 @@ def reg_shell(V):
     return P
 
 
+# inner edge of the A-posed arm (|x|) per height: the torso/hips/thighs never exceed |x|~0.8 below the
+# shoulder, while the arm starts at ~1.0 near hand level and moves in towards the shoulder at y~1.8
+ARM_Y = [0.40, 0.80, 1.20, 1.40, 1.60, 1.80, 2.45]
+ARM_X = [1.00, 1.00, 1.00, 0.88, 0.72, 0.62, 0.62]
+
+
 def arm_weight(P):
-    """0..1 membership of the A-posed shell arms (feet/legs excluded by height)."""
-    return smooth(np.abs(P[:, 0]), 0.62, 0.86) * (P[:, 1] < 2.45) * (P[:, 1] > 0.15)
+    """0..1 membership of the A-posed shell arms. A plain |x| test also grabbed the outer hips and
+    upper thighs (|x| 0.7-0.86 at y 0.15-0.5), which then got rotated with the arms and tore the pelvis."""
+    x0 = np.interp(P[:, 1], ARM_Y, ARM_X)
+    return smooth(np.abs(P[:, 0]) - x0, 0.0, 0.24) * (P[:, 1] < 2.45) * (P[:, 1] > 0.35)
 
 
 def lower_arms(P, deg=34.0, stretch=1.22):
@@ -260,10 +268,20 @@ def main():
     V, G = load_obj(f"{ROOT}/models/body_shell.obj"); F = np.vstack(list(G.values())); print("shell verts", len(V), "faces", len(F))
     P = straighten_z(reg_shell(V), SKV); P2 = lower_arms(P)
     w_all = arm_weight(P); ref = SKV[(np.abs(SKV[:, 0]) > 0.7) & (SKV[:, 1] > 0) & (SKV[:, 1] < 1.7)]
-    sel = (w_all > 0.5) & (P2[:, 1] < 1.7)
-    for sgn in (1, -1):   # this shell has its arms staggered in depth, so level each arm separately
+    # This shell has its arms swinging in depth (one back, one forward), growing from shoulder to hand.
+    # Level each arm with the skeleton arm using its own depth profile along the arm (distance from the
+    # shoulder), easing in from 0 at the shoulder so the torso/shoulder join is not sheared.
+    edges = np.arange(0.0, 3.6, 0.4); ctr = (edges[:-1] + edges[1:]) / 2
+    for sgn in (1, -1):
         side = np.sign(P[:, 0]) == sgn
-        P2[:, 2] += w_all * side * (np.median(ref[np.sign(ref[:, 0]) == sgn, 2]) - np.median(P2[sel & side, 2]))
+        d = np.hypot(np.abs(P[:, 0]) - 0.6, P[:, 1] - 2.25)
+        m = side & (w_all > 0.3)
+        med = np.array([np.median(P[m & (d >= lo) & (d < lo + 0.4), 2]) if (m & (d >= lo) & (d < lo + 0.4)).sum() > 3
+                        else np.nan for lo in edges[:-1]])
+        ok = ~np.isnan(med)
+        prof = np.interp(d, ctr[ok], med[ok])
+        zt = np.median(ref[np.sign(ref[:, 0]) == sgn, 2])
+        P2[:, 2] += w_all * side * smooth(d, 0.0, 0.8) * (zt - prof)
     Cb = P[F].mean(1)
     armflag = arm_weight(Cb) > 0.5
     C2 = P2[F].mean(1); lab = classify(C2, arm_hint=armflag)
