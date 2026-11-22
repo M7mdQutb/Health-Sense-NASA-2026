@@ -3,7 +3,7 @@
   'use strict';
   const { store, bus, actions, sim, C } = Core;
   Layers.init(); 
-  // Gamification.init();
+  Gamification.init();
   UI.init();
 
   const stage = document.getElementById('stage'); let twin, fallbackWhy = null;
@@ -21,7 +21,7 @@
 
   bus.on(C.EVENTS.COMMS_STATE_CHANGED, p => twin.setAutonomous(p.state === 'offline'));
   sim.start(2000);                       // telemetry cadence: every 2 s, all data from Core.sim (replaceable by a live source)
-  //window.HS = { twin, Core, Layers, Logging, Gamification, UI, fallbackWhy };
-  window.HS = { twin, Core, Layers, Logging, UI, fallbackWhy };
+  window.HS = { twin, Core, Layers, Logging, Gamification, UI, fallbackWhy };
+  //window.HS = { twin, Core, Layers, Logging, UI, fallbackWhy };
 
 })();
