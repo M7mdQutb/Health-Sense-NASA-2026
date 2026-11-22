@@ -4,6 +4,8 @@
 Usage:  python tools/build_models.py [--debug]"""
 import numpy as np, json, base64, sys, os
 from scipy.spatial import cKDTree
+from scipy.sparse import coo_matrix
+from scipy.sparse.csgraph import connected_components
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 REGIONS = ["head", "neck", "chest", "upper_back", "lower_back", "abdomen", "spine", "l_shoulder", "r_shoulder",
@@ -13,19 +15,28 @@ SK_TOP, SK_BOT = 3.497, -3.412
 
 # ---------- OBJ loading ----------
 def load_obj(fn):
-    V, groups, cur = [], {}, "default"
+    """Returns (V, {group: faces}). Groups are the OBJ objects/groups; if the file holds a single
+    object but several `usemtl` materials (Blender 5 export of organs.obj) groups are the materials."""
+    V, faces, obj, mtl = [], {}, "default", ""
     with open(fn, errors="ignore") as fh:
         for line in fh:
             if line.startswith("v "):
                 V.append(line.split()[1:4])
             elif line[:2] in ("o ", "g "):
-                cur = line[2:].strip(); groups.setdefault(cur, [])
+                obj = line[2:].strip()
+            elif line.startswith("usemtl "):
+                mtl = line[7:].strip()
             elif line.startswith("f "):
                 # OBJ allows negative (relative) indices: -1 = last vertex read so far
                 ix = [int(t.split("/")[0]) for t in line.split()[1:]]
                 ix = [i if i > 0 else len(V) + i + 1 for i in ix]
-                groups.setdefault(cur, []).extend([ix[0], ix[i], ix[i + 1]] for i in range(1, len(ix) - 1))
+                faces.setdefault((obj, mtl), []).extend([ix[0], ix[i], ix[i + 1]] for i in range(1, len(ix) - 1))
     V = np.array(V, dtype=np.float64)
+    objs = {k[0] for k in faces}; mtls = {k[1] for k in faces if k[1]}
+    by_mtl = len(objs) == 1 and len(mtls) > 1
+    groups = {}
+    for (o, m), f in faces.items():
+        groups.setdefault(m if by_mtl else o, []).extend(f)
     return V, {g: np.array(f, dtype=np.int64) - 1 for g, f in groups.items() if f}
 
 
@@ -186,6 +197,30 @@ def skeleton_labels(g, C):
     return leg_label(C)
 
 
+
+# ---------- skeleton without group names (single-object export) ----------
+def split_parts(V, F):
+    """Split a mesh into its loose (connected) parts: skull, each rib, each vertebra, pelvis, ..."""
+    n = len(V); e = np.vstack([F[:, [0, 1]], F[:, [1, 2]]])
+    _, lab = connected_components(coo_matrix((np.ones(len(e)), (e[:, 0], e[:, 1])), shape=(n, n)), directed=False)
+    fl = lab[F[:, 0]]
+    return [F[fl == c] for c in np.unique(fl)]
+
+
+def skeleton_pos_labels(C):
+    x, y = C[:, 0], C[:, 1]; ax = np.abs(x); sd = side_of(x)
+    R = torso_label(C)
+    R[(C[:, 2] <= 0) & (ax < 0.16) & (y >= 0.55) & (y < 2.3)] = "spine"
+    low = y < 0.55; R[low] = leg_label(C)[low]
+    R[(y >= 2.28) & (y < 2.62)] = "neck"; R[y >= 2.62] = "head"
+    d = np.minimum(np.hypot(x - .6, y - 2.25), np.hypot(x + .6, y - 2.25))
+    sh = (d < .5) & (y > 0.9)
+    R[sh] = np.char.add(sd, "shoulder")[sh]
+    arm = (ax > 0.65) & (y > -0.5) & ~sh
+    R[arm] = np.char.add(sd, "arm")[arm]
+    return R
+
+
 def main():
     meshes = {k: {r: [] for r in REGIONS} for k in ("skin", "bone", "organ")}
 
@@ -195,11 +230,17 @@ def main():
 
     # skeleton -> bone meshes
     V, G = load_obj(f"{ROOT}/models/skeleton.obj"); print("skeleton verts", len(V)); SKV = V
+    named = any(g in SK for g in G)               # old export with named groups (Group32905 ...)
     for g, F in G.items():
-        Vd, Fd = decimate(V, F, SK_BUDGET.get(g, 400))
-        if len(Fd) == 0: continue
-        _, nn = cKDTree(V[F].mean(1)).query(Vd[Fd].mean(1))
-        put("bone", Vd, Fd, skeleton_labels(g, V[F].mean(1))[nn])
+        parts = [F] if named else split_parts(V, F)   # new export: one object -> split loose parts
+        for Fp in parts:
+            Vp, Fq = compact(V, Fp)
+            budget = SK_BUDGET.get(g, 400) if named else max(150, int(len(Fq) * 0.3))
+            Vd, Fd = decimate(Vp, Fq, budget)
+            if len(Fd) == 0: continue
+            C = Vp[Fq].mean(1); _, nn = cKDTree(C).query(Vd[Fd].mean(1))
+            lab = (skeleton_labels(g, C) if named else skeleton_pos_labels(C))[nn]
+            put("bone", Vd, Fd, lab)
     # organs
     V, G = load_obj(f"{ROOT}/models/organs.obj"); V = reg_organs(V); print("organ verts", len(V))
     by = {}
@@ -220,7 +261,9 @@ def main():
     P = straighten_z(reg_shell(V), SKV); P2 = lower_arms(P)
     w_all = arm_weight(P); ref = SKV[(np.abs(SKV[:, 0]) > 0.7) & (SKV[:, 1] > 0) & (SKV[:, 1] < 1.7)]
     sel = (w_all > 0.5) & (P2[:, 1] < 1.7)
-    P2[:, 2] += w_all * (np.median(ref[:, 2]) - np.median(P2[sel, 2]))   # pull arms level with the skeleton arms
+    for sgn in (1, -1):   # this shell has its arms staggered in depth, so level each arm separately
+        side = np.sign(P[:, 0]) == sgn
+        P2[:, 2] += w_all * side * (np.median(ref[np.sign(ref[:, 0]) == sgn, 2]) - np.median(P2[sel & side, 2]))
     Cb = P[F].mean(1)
     armflag = arm_weight(Cb) > 0.5
     C2 = P2[F].mean(1); lab = classify(C2, arm_hint=armflag)
